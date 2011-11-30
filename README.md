@@ -17,17 +17,17 @@ Ewok use zookeeper to store every TransactionManager's ledger id:
 
 	 /ewok
 		/app1
-				/192-168-1-100 -- 0 [ledger id]
-							  /ownership [Ephemeral node]
+				/192-168-1-100 -- 0		[ledger id]
+					 /ownership   				[Ephemeral node]
 				/192-168-1-101 -- 1
-							  /ownership
+				  	 /ownership
 		/app2
 				/192-168-1-135 -- 99
 				/192-168-1-136 -- 100
-							  /ownership
+					/ownership
 				......
 
-And ewok use bookkeeper to write transaction log,it writes a TransactionLogRecord as an entry to ledger.If it write failed,it just create a new ledger and copy all dangling transactions to the new ledger.
+And ewok use bookkeeper to write transaction logs,it writes a TransactionLogRecord as an entry to ledger.If it write failed,it just create a new ledger and copy all dangling transactions to the new ledger.
 
 #Configuration
 
