@@ -3,7 +3,6 @@ package com.taobao.ewok;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 import org.apache.commons.logging.Log;
@@ -16,6 +15,7 @@ import org.apache.zookeeper.data.Stat;
 
 
 /**
+ * Ewok use this class to talk with zookeeper
  * 
  * @author boyan(boyan@taobao.com)
  * 
@@ -80,12 +80,12 @@ public class EwokZookeeper {
 
     private void claimServerIdPath() throws InterruptedException, KeeperException {
         String ownershipPath = serverIdPath + "/ownership";
-        zk.create(ownershipPath, conf.getServerId().getBytes(), null, CreateMode.EPHEMERAL);
+        zk.create(ownershipPath, conf.getEwokServerId().getBytes(), null, CreateMode.EPHEMERAL);
     }
 
 
     private void initServerIdPath() throws InterruptedException, KeeperException {
-        this.serverIdPath = rootPath + "/" + conf.getServerId();
+        this.serverIdPath = rootPath + "/" + conf.getEwokServerId();
         Stat stat = zk.exists(serverIdPath, false);
         if (stat == null) {
             createPersistentPath(serverIdPath);
@@ -107,7 +107,7 @@ public class EwokZookeeper {
 
 
     private void initRootPath() throws InterruptedException, KeeperException {
-        rootPath = "/" + conf.getZkRoot() + "/tms";
+        rootPath = "/" + conf.getZkRoot() + "/" + conf.getBtmConf().getServerId();
         try {
             Stat stat = zk.exists(rootPath, false);
             if (stat == null) {

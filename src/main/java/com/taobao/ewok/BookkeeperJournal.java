@@ -16,6 +16,7 @@ import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.BookKeeper.DigestType;
 import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.zookeeper.KeeperException;
@@ -24,6 +25,7 @@ import bitronix.tm.TransactionManagerServices;
 import bitronix.tm.journal.CorruptedTransactionLogException;
 import bitronix.tm.journal.Journal;
 import bitronix.tm.utils.Decoder;
+import bitronix.tm.utils.InitializationException;
 import bitronix.tm.utils.Uid;
 
 
@@ -43,12 +45,48 @@ public class BookkeeperJournal implements Journal {
 
 
     public BookkeeperJournal() {
+        conf = new EwokConfiguration();
+        initZookeeper();
+        initBookkeeper();
+    }
 
+
+    private void initBookkeeper() {
+        try {
+            this.bookKeeper =
+                    new BookKeeper(new ClientConfiguration().setZkServers(conf.getZkServers()).setZkTimeout(
+                        conf.getZkSessionTimeout()));
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new InitializationException("Init bookkeeper intrrupted", e);
+        }
+        catch (Exception e) {
+            throw new InitializationException("Error creating BookKeeper", e);
+        }
+    }
+
+
+    private void initZookeeper() {
+        try {
+            this.ewokZookeeper = new EwokZookeeper(conf);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        catch (Exception e) {
+            throw new InitializationException("Error creating EwokZookeeper", e);
+        }
     }
 
 
     public void shutdown() {
-        // TODO Auto-generated method stub
+        try {
+            this.clone();
+        }
+        catch (Throwable e) {
+            log.error("error shutting down bookkeeper journal. Transaction log integrity could be compromised!", e);
+        }
 
     }
 
