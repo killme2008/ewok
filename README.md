@@ -18,7 +18,7 @@ Ewok use zookeeper to store every TransactionManager's ledger id:
 	 /ewok
 		/app1
 				/192-168-1-100 -- 0		[ledger id]
-					 /ownership	  [Ephemeral node]
+					 /ownership	            [Ephemeral node]
 				/192-168-1-101 -- 1
 				  	 /ownership
 		/app2
