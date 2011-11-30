@@ -1,5 +1,5 @@
 #Introduction
-A BTM transaction logs journal using bookkeeper.
+A  high available BTM transaction logs journal implementation using bookkeeper.
 
 BTM: http://docs.codehaus.org/display/BTM/Home
 
