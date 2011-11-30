@@ -1,6 +1,10 @@
 package com.taobao.ewok;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -33,17 +37,44 @@ public class EwokZookeeper {
     }
 
 
-    public long readLogId() throws InterruptedException, KeeperException {
+    public Set<Long> readLogIds() throws InterruptedException, KeeperException {
         byte[] data = zk.getData(serverIdPath, false, null);
         if (data == null)
-            return -1;
-        else
-            return Long.valueOf(new String(data));
+            return Collections.emptySet();
+        else {
+            String[] tmps = new String(data).split(SPLIT);
+            Set<Long> rt = new HashSet<Long>();
+            for (String tmp : tmps) {
+                rt.add(Long.valueOf(tmp));
+
+            }
+            return rt;
+        }
+    }
+
+    static final String SPLIT = ",";
+
+
+    private String join(Set<Long> ids) {
+        if (ids == null)
+            return "";
+        StringBuilder sb = new StringBuilder();
+        boolean wasFirst = true;
+        for (long id : ids) {
+            if (wasFirst) {
+                sb.append(id);
+                wasFirst = false;
+            }
+            else {
+                sb.append(",").append(id);
+            }
+        }
+        return sb.toString();
     }
 
 
-    public void writeLogId(long id) throws InterruptedException, KeeperException {
-        zk.setData(serverIdPath, String.valueOf(id).getBytes(), -1);
+    public void writeLogIds(Set<Long> ids) throws InterruptedException, KeeperException {
+        zk.setData(serverIdPath, join(ids).getBytes(), -1);
     }
 
 

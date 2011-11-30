@@ -1,5 +1,7 @@
 package com.taobao.ewok;
 
+import bitronix.tm.Configuration;
+
 /**
  * A ewok configuration
  * 
@@ -15,6 +17,30 @@ public class EwokConfiguration {
     private int eSize = 3;
     private int qSize = 2;
     private String password = "ewok";
+    private int cursorBatchSize=5;
+    private Configuration btmConf;
+    
+    
+
+
+    public Configuration getBtmConf() {
+        return btmConf;
+    }
+
+
+    public void setBtmConf(Configuration btmConf) {
+        this.btmConf = btmConf;
+    }
+
+
+    public int getCursorBatchSize() {
+        return cursorBatchSize;
+    }
+
+
+    public void setCursorBatchSize(int cursorBatchSize) {
+        this.cursorBatchSize = cursorBatchSize;
+    }
 
 
     public int getESize() {

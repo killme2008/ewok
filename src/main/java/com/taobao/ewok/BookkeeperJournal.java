@@ -1,9 +1,14 @@
 package com.taobao.ewok;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import javax.transaction.Status;
 
@@ -15,8 +20,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.zookeeper.KeeperException;
 
-import bitronix.tm.Configuration;
 import bitronix.tm.TransactionManagerServices;
+import bitronix.tm.journal.CorruptedTransactionLogException;
 import bitronix.tm.journal.Journal;
 import bitronix.tm.utils.Decoder;
 import bitronix.tm.utils.Uid;
@@ -32,9 +37,9 @@ public class BookkeeperJournal implements Journal {
     private EwokZookeeper ewokZookeeper;
     private BookKeeper bookKeeper;
     private EwokConfiguration conf;
-    private LedgerHandle currHandle;
-    private Configuration btmConf;
+    private LedgerAppender activeApd;
     static final Log log = LogFactory.getLog(BookkeeperJournal.class);
+    private Set<Long> handles = new HashSet<Long>();
 
 
     public BookkeeperJournal() {
@@ -48,21 +53,57 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    public void close() throws IOException {
-        // TODO Auto-generated method stub
+    public synchronized void close() throws IOException {
+        try {
+            if (this.activeApd != null) {
+                try {
+                    this.activeApd.close();
+                    this.activeApd = null;
+                }
+                catch (BKException e) {
+                    log.error("Close handle failed", e);
+                }
+            }
+
+            if (this.bookKeeper != null) {
+                try {
+                    this.bookKeeper.close();
+                }
+                catch (BKException e) {
+                    log.error("Close bookKeeper failed", e);
+                }
+            }
+
+            if (this.ewokZookeeper != null) {
+                ewokZookeeper.close();
+            }
+            this.handles.clear();
+
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
     }
 
 
     public Map collectDanglingRecords() throws IOException {
-        // TODO Auto-generated method stub
-        return null;
+        try {
+            return collectDanglingRecords(this.activeApd);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        }
+        catch (BKException e) {
+            throw new IOException("Collect dangling records from bookkeeper failed", e);
+        }
     }
 
 
     public void force() throws IOException {
         // ignore
-        // Bookkeeper store entry in force way by default.
+        // Store entries in forcing way by default.
     }
 
 
@@ -85,7 +126,10 @@ public class BookkeeperJournal implements Journal {
      *             open.
      */
     public void log(int status, Uid gtrid, Set uniqueNames) throws IOException {
-        if (TransactionManagerServices.getConfiguration().isFilterLogStatus()) {
+        if (activeApd == null)
+            throw new IOException("cannot write log, bookkeeper logger is not open");
+
+        if (conf.getBtmConf().isFilterLogStatus()) {
             if (status != Status.STATUS_COMMITTING && status != Status.STATUS_COMMITTED
                     && status != Status.STATUS_UNKNOWN) {
                 if (log.isDebugEnabled())
@@ -95,71 +139,79 @@ public class BookkeeperJournal implements Journal {
         }
 
         TransactionLogRecord tlog = new TransactionLogRecord(status, gtrid, uniqueNames);
-        synchronized (this) {
-            // boolean written = activeTla.writeLog(tlog);
-            // if (!written) {
-            // // time to swap log files
-            // swapJournalFiles();
-            //
-            // written = activeTla.writeLog(tlog);
-            // if (!written)
-            // throw new
-            // IOException("no room to write log to journal even after swap, circular collision avoided");
-            // }
-        } // synchro
+        try {
+            synchronized (this) {
+                boolean written = activeApd.writeLog(tlog);
+                if (!written) {
+                    // time to swap log files
+                    swapJournalFiles();
+
+                    written = activeApd.writeLog(tlog);
+                    if (!written)
+                        throw new IOException(
+                            "Could not write log to journal even after swap, circular collision avoided");
+                }
+            }
+        }
+        catch (KeeperException e) {
+            throw new IOException("Could not write log to bookkeeper", e);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        }
+        catch (BKException e) {
+            throw new IOException("Could not write log to bookkeeper", e);
+        }
 
     }
 
 
-    private boolean addEntry(TransactionLogRecord tlog) {
+    private void swapJournalFiles() throws InterruptedException, BKException, KeeperException, IOException {
+        LedgerAppender passiveApd = createNewLedgerAppender();
+        copyDanglingRecords(activeApd, passiveApd);
 
-        int recordSize = tlog.calculateTotalRecordSize();
-        long futureFilePosition = currHandle.getLength() + recordSize;
-        if (futureFilePosition >= btmConf.getMaxLogSizeInMb() * 1024 * 1024) {
-            if (log.isDebugEnabled())
-                log.debug("log file is full (size would be: " + futureFilePosition + ", max allowed: "
-                        + btmConf.getMaxLogSizeInMb() + "Mb)");
-            return false;
-        }
-        if (log.isDebugEnabled())
-            log.debug("between " + getHeader().getPosition() + " and " + futureFilePosition + ", writing " + tlog);
+        this.handles.remove(activeApd.getHandle().getId());
+        this.handles.add(passiveApd.getHandle().getId());
+        this.ewokZookeeper.writeLogIds(handles);
 
-        ByteBuffer buf = ByteBuffer.allocate(recordSize);
-        buf.putInt(tlog.getStatus());
-        buf.putInt(tlog.getRecordLength());
-        buf.putInt(tlog.getHeaderLength());
-        buf.putLong(tlog.getTime());
-        buf.putInt(tlog.getSequenceNumber());
-        buf.putInt(tlog.getCrc32());
-        buf.put((byte) tlog.getGtrid().getArray().length);
-        buf.put(tlog.getGtrid().getArray());
-        Set<String> uniqueNames = tlog.getUniqueNames();
-        buf.putInt(uniqueNames.size());
-        for (String uniqueName : uniqueNames) {
-            buf.putShort((short) uniqueName.length());
-            buf.put(uniqueName.getBytes());
-        }
-        buf.putInt(tlog.getEndRecord());
+        activeApd.close();
+        activeApd = passiveApd;
+    }
 
-        buf.flip();
-        while (buf.hasRemaining()) {
-            this.fc.write(buf);
-        }
+
+    /**
+     * Open a read-only LedgerHandle for reading log
+     * 
+     * @return
+     * @throws BKException
+     * @throws InterruptedException
+     */
+    public LedgerCursor getCursor(long id) throws BKException, InterruptedException {
+        LedgerHandle lh = bookKeeper.openLedgerNoRecovery(id, DigestType.CRC32, conf.getPassword().getBytes());
+        long last = lh.getLastAddConfirmed();
+        return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
     }
 
 
     public synchronized void open() throws IOException {
         try {
-            long id = this.ewokZookeeper.readLogId();
-            LedgerHandle lh = null;
-            if (id == -1) {
-                // Create legder
-                lh = createNewLedger();
+            this.activeApd = createNewLedgerAppender();
+            Set<Long> existsIds = this.ewokZookeeper.readLogIds();
+            if (existsIds.isEmpty()) {
+                // No log history
             }
             else {
-                lh = bookKeeper.openLedger(id, DigestType.CRC32, conf.getPassword().getBytes());
+                List<Long> sortedIds = new ArrayList<Long>(existsIds);
+                Collections.sort(sortedIds);
+                for (long id : sortedIds) {
+                    LedgerCursor cursor = getCursor(id);
+                    copyDanglingRecords(cursor, this.activeApd);
+                }
             }
-            this.currHandle = lh;
+            // Copy all dangling records done,then store new handels to zk
+            this.handles.add(this.activeApd.getHandle().getId());
+            this.ewokZookeeper.writeLogIds(this.handles);
         }
         catch (KeeperException e) {
             throw new IOException(e);
@@ -174,13 +226,128 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    private LedgerHandle createNewLedger() throws InterruptedException, BKException, KeeperException {
-        LedgerHandle lh;
-        lh = bookKeeper.createLedger(conf.getESize(), conf.getQSize(), DigestType.CRC32, conf.getPassword().getBytes());
-        long newId = lh.getId();
-        // Write it to zookeeper
-        this.ewokZookeeper.writeLogId(newId);
-        return lh;
+    private LedgerAppender createNewLedgerAppender() throws InterruptedException, BKException {
+        LedgerHandle lh =
+                bookKeeper.createLedger(conf.getESize(), conf.getQSize(), DigestType.CRC32, conf.getPassword()
+                    .getBytes());
+        return new LedgerAppender(bookKeeper, lh, conf);
+    }
+
+
+    /**
+     * Copy all records that have status COMMITTING and no corresponding
+     * COMMITTED record from the fromTla to the toTla.
+     * 
+     * @param fromTla
+     *            the source where to search for COMMITTING records with no
+     *            corresponding COMMITTED record
+     * @param toTla
+     *            the destination where the COMMITTING records will be copied to
+     * @throws java.io.IOException
+     *             in case of disk IO failure.
+     */
+    private static void copyDanglingRecords(LedgerAppender fromTla, LedgerAppender toTla) throws IOException,
+            InterruptedException, BKException {
+        if (log.isDebugEnabled())
+            log.debug("starting copy of dangling records");
+
+        Map<Uid, TransactionLogRecord> danglingRecords = collectDanglingRecords(fromTla);
+        for (TransactionLogRecord tlog : danglingRecords.values()) {
+            toTla.writeLog(tlog);
+        }
+
+        if (log.isDebugEnabled())
+            log.debug(danglingRecords.size() + " dangling record(s) copied to passive log file");
+    }
+
+
+    private static void copyDanglingRecords(LedgerCursor cursor, LedgerAppender toTla) throws IOException,
+            InterruptedException, BKException {
+        if (log.isDebugEnabled())
+            log.debug("starting copy of dangling records");
+
+        Map<Uid, TransactionLogRecord> danglingRecords = collectDanglingRecords(cursor);
+        for (TransactionLogRecord tlog : danglingRecords.values()) {
+            toTla.writeLog(tlog);
+        }
+
+        if (log.isDebugEnabled())
+            log.debug(danglingRecords.size() + " dangling record(s) copied to passive log file");
+    }
+
+
+    /**
+     * Create a Map of TransactionLogRecord with COMMITTING status objects using
+     * the GTRID byte[] as key that have no corresponding COMMITTED record
+     * 
+     * @param tla
+     *            the TransactionLogAppender to scan
+     * @return a Map using Uid objects GTRID as key and
+     *         {@link TransactionLogRecord} as value
+     * @throws java.io.IOException
+     *             in case of disk IO failure.
+     */
+    private static Map<Uid, TransactionLogRecord> collectDanglingRecords(LedgerAppender tla) throws IOException,
+            BKException, InterruptedException {
+
+        LedgerCursor tlc = tla.getCursor();
+        return collectDanglingRecords(tlc);
+    }
+
+
+    private static Map<Uid, TransactionLogRecord> collectDanglingRecords(LedgerCursor tlc) throws IOException,
+            BKException, InterruptedException, CorruptedTransactionLogException {
+        Map<Uid, TransactionLogRecord> danglingRecords = new HashMap<Uid, TransactionLogRecord>(64);
+        try {
+            int committing = 0;
+            int committed = 0;
+
+            while (true) {
+                TransactionLogRecord tlog;
+                try {
+                    tlog = tlc.readLog();
+                }
+                catch (CorruptedTransactionLogException ex) {
+                    if (TransactionManagerServices.getConfiguration().isSkipCorruptedLogs()) {
+                        log.error("skipping corrupted log", ex);
+                        continue;
+                    }
+                    throw ex;
+                }
+
+                if (tlog == null)
+                    break;
+
+                int status = tlog.getStatus();
+                if (status == Status.STATUS_COMMITTING) {
+                    danglingRecords.put(tlog.getGtrid(), tlog);
+                    committing++;
+                }
+                if (status == Status.STATUS_COMMITTED || status == Status.STATUS_UNKNOWN) {
+                    TransactionLogRecord rec = danglingRecords.get(tlog.getGtrid());
+                    if (rec != null) {
+                        Set<String> recUniqueNames = new HashSet<String>(rec.getUniqueNames());
+                        recUniqueNames.removeAll(tlog.getUniqueNames());
+                        if (recUniqueNames.isEmpty()) {
+                            danglingRecords.remove(tlog.getGtrid());
+                            committed++;
+                        }
+                        else {
+                            danglingRecords.put(tlog.getGtrid(),
+                                new TransactionLogRecord(rec.getStatus(), rec.getGtrid(), recUniqueNames));
+                        }
+                    }
+                }
+            }
+
+            if (log.isDebugEnabled())
+                log.debug("collected dangling records of " + tlc.getHandle().getId() + ", committing: " + committing
+                        + ", committed: " + committed + ", delta: " + danglingRecords.size());
+        }
+        finally {
+            tlc.close();
+        }
+        return danglingRecords;
     }
 
 }
