@@ -54,11 +54,16 @@ public class LedgerAppender {
      * @throws BKException
      * @throws InterruptedException
      */
-    public LedgerCursor getCursor() throws BKException, InterruptedException {
-        LedgerHandle lh =
-                bookKeeper.openLedgerNoRecovery(handle.getId(), DigestType.CRC32, conf.getPassword().getBytes());
-        long last = lh.readLastConfirmed();
-        return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+    public synchronized LedgerCursor getCursor() throws BKException, InterruptedException {
+        if (closed) {
+            LedgerHandle lh =
+                    bookKeeper.openLedgerNoRecovery(handle.getId(), DigestType.CRC32, conf.getPassword().getBytes());
+            long last = lh.getLastAddConfirmed();
+            return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+        }
+        else {
+            return new LedgerCursor(this.handle.getLastAddConfirmed(), conf.getCursorBatchSize(), handle);
+        }
     }
 
 

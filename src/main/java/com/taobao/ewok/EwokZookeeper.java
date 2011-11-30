@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.zookeeper.CreateMode;
@@ -62,14 +63,22 @@ public class EwokZookeeper {
 
 
     public Set<Long> readLogIds() throws InterruptedException, KeeperException {
-        byte[] data = zk.getData(serverIdPath, false, null);
+        return this.readLogIds(this.serverIdPath);
+    }
+
+
+    public Set<Long> readLogIds(String path) throws InterruptedException, KeeperException {
+        if (StringUtils.isBlank(path))
+            return Collections.emptySet();
+        byte[] data = zk.getData(path, false, null);
         if (data == null)
             return Collections.emptySet();
         else {
             String[] tmps = new String(data).split(SPLIT);
             Set<Long> rt = new HashSet<Long>();
             for (String tmp : tmps) {
-                rt.add(Long.valueOf(tmp));
+                if (!StringUtils.isBlank(tmp))
+                    rt.add(Long.valueOf(tmp));
 
             }
             return rt;

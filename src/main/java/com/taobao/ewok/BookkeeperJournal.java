@@ -44,6 +44,11 @@ public class BookkeeperJournal implements Journal {
     private Set<Long> handles = new HashSet<Long>();
 
 
+    EwokZookeeper getEwokZookeeper() {
+        return ewokZookeeper;
+    }
+
+
     public BookkeeperJournal() {
         conf = new EwokConfiguration();
         initZookeeper();
@@ -53,9 +58,10 @@ public class BookkeeperJournal implements Journal {
 
     private void initBookkeeper() {
         try {
-            this.bookKeeper =
-                    new BookKeeper(new ClientConfiguration().setZkServers(conf.getZkServers()).setZkTimeout(
-                        conf.getZkSessionTimeout()));
+            ClientConfiguration clientConf =
+                    new ClientConfiguration().setZkServers(conf.getZkServers())
+                        .setZkTimeout(conf.getZkSessionTimeout());
+            this.bookKeeper = new BookKeeper(clientConf);
         }
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -198,7 +204,7 @@ public class BookkeeperJournal implements Journal {
             throw new IOException(e);
         }
         catch (BKException e) {
-            // TODO 理论上说，写应该是一直可写的，但是如果写失败，是否应该重新打开文件？
+            // TODO create a new ledger?
             throw new IOException("Could not write log to bookkeeper", e);
         }
 
@@ -207,7 +213,7 @@ public class BookkeeperJournal implements Journal {
     static final int MAX_RETRY_COUNT = 3;
 
 
-    private void swapJournalFiles() throws InterruptedException, BKException, KeeperException, IOException {
+    synchronized void swapJournalFiles() throws InterruptedException, BKException, KeeperException, IOException {
         LedgerAppender passiveApd = null;
         for (int i = 0; i < MAX_RETRY_COUNT; i++) {
             try {
@@ -251,34 +257,62 @@ public class BookkeeperJournal implements Journal {
      * @throws BKException
      * @throws InterruptedException
      */
-    public LedgerCursor getCursor(long id) throws BKException, InterruptedException {
-        LedgerHandle lh = bookKeeper.openLedger(id, DigestType.CRC32, conf.getPassword().getBytes());
-        long last = lh.getLastAddConfirmed();
-        return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+    LedgerCursor getCursor(long id) throws BKException, InterruptedException {
+        try {
+            LedgerHandle lh = bookKeeper.openLedger(id, DigestType.CRC32, conf.getPassword().getBytes());
+            long last = lh.getLastAddConfirmed();
+            return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+        }
+        catch (BKException e) {
+            if (e.getCode() == BKException.Code.NoSuchLedgerExistsException) {
+                return null;
+            }
+            else
+                throw e;
+        }
+    }
+
+
+    EwokConfiguration getConf() {
+        return conf;
+    }
+
+
+    LedgerAppender getActiveApd() {
+        return activeApd;
+    }
+
+
+    Set<Long> getHandles() {
+        return handles;
     }
 
 
     public synchronized void open() throws IOException {
         try {
             this.activeApd = createNewLedgerAppender(bookKeeper, conf);
-            Set<Long> existsIds = this.ewokZookeeper.readLogIds();
-            if (existsIds.isEmpty()) {
+            Set<Long> myExistsIds = this.ewokZookeeper.readLogIds();
+            Set<Long> loadExistsIds = this.ewokZookeeper.readLogIds(conf.getLoadZkPath());
+            Set<Long> uniqSet = new HashSet<Long>(myExistsIds);
+            uniqSet.addAll(loadExistsIds);
+            if (myExistsIds.isEmpty() && loadExistsIds.isEmpty()) {
                 // No log history
             }
             else {
-                List<Long> sortedIds = new ArrayList<Long>(existsIds);
+                List<Long> sortedIds = new ArrayList<Long>(uniqSet);
                 Collections.sort(sortedIds);
                 for (long id : sortedIds) {
                     LedgerCursor cursor = getCursor(id);
-                    copyDanglingRecords(cursor, this.activeApd);
+                    if (cursor != null)
+                        copyDanglingRecords(cursor, this.activeApd);
                 }
             }
-            // Copy all dangling records done,then store new handels to zk
+            // Copy all dangling records done,then store the new handle to zk
             this.handles.add(this.activeApd.getHandle().getId());
             this.ewokZookeeper.writeLogIds(this.handles);
 
-            // Now we can delete old ledgers
-            for (final long id : existsIds) {
+            // Now it's safe to delete old ledgers
+            for (final long id : uniqSet) {
                 deleteLedger(id);
             }
         }
@@ -295,7 +329,7 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    private void deleteLedger(final long id) {
+    void deleteLedger(final long id) {
         bookKeeper.asyncDeleteLedger(id, new AsyncCallback.DeleteCallback() {
 
             public void deleteComplete(int rc, Object ctx) {
@@ -316,6 +350,7 @@ public class BookkeeperJournal implements Journal {
         LedgerHandle lh =
                 bookKeeper.createLedger(conf.getESize(), conf.getQSize(), DigestType.CRC32, conf.getPassword()
                     .getBytes());
+        log.warn("Create a new ledger:" + lh.getId());
         return new LedgerAppender(bookKeeper, lh, conf);
     }
 
@@ -377,7 +412,10 @@ public class BookkeeperJournal implements Journal {
             BKException, InterruptedException {
 
         LedgerCursor tlc = tla.getCursor();
-        return collectDanglingRecords(tlc);
+        if (tlc != null)
+            return collectDanglingRecords(tlc);
+        else
+            return Collections.emptyMap();
     }
 
 
