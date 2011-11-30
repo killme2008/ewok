@@ -9,13 +9,20 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.KeeperException.Code;
+import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 
 
 /**
- * Ewok use this class to talk with zookeeper
+ * Ewok use this class to talk with zookeeper,the tree in zookeeper:</br> /ewok/<br>
+ * &nbsp;&nbsp;&nbsp;&nbsp;/btmServerId1</br>
+ * &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/ewokServerId1</br>
+ * &nbsp;&nbsp;
+ * &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/ownership</br>
  * 
  * @author boyan(boyan@taobao.com)
  * 
@@ -30,10 +37,27 @@ public class EwokZookeeper {
 
     public EwokZookeeper(EwokConfiguration conf) throws IOException, InterruptedException, KeeperException {
         this.conf = conf;
-        zk = new ZooKeeper(conf.getZkServers(), conf.getZkSessionTimeout(), null);
+        zk = new ZooKeeper(conf.getZkServers(), conf.getZkSessionTimeout(), new Watcher() {
+
+            public void process(WatchedEvent event) {
+                if (log.isDebugEnabled())
+                    log.debug("Processing event " + event);
+
+            }
+        });
         initRootPath();
         initServerIdPath();
         claimServerIdPath();
+    }
+
+
+    String getRootPath() {
+        return rootPath;
+    }
+
+
+    String getServerIdPath() {
+        return serverIdPath;
     }
 
 
@@ -80,7 +104,7 @@ public class EwokZookeeper {
 
     private void claimServerIdPath() throws InterruptedException, KeeperException {
         String ownershipPath = serverIdPath + "/ownership";
-        zk.create(ownershipPath, conf.getEwokServerId().getBytes(), null, CreateMode.EPHEMERAL);
+        zk.create(ownershipPath, conf.getEwokServerId().getBytes(), Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
     }
 
 
@@ -95,7 +119,7 @@ public class EwokZookeeper {
 
     private void createPersistentPath(String path) throws InterruptedException, KeeperException {
         try {
-            zk.create(path, null, null, CreateMode.PERSISTENT);
+            zk.create(path, null, Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
         }
         catch (KeeperException e) {
             if (e.code() == Code.NODEEXISTS)

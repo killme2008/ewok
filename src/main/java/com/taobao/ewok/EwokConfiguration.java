@@ -1,6 +1,7 @@
 package com.taobao.ewok;
 
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.Inet6Address;
@@ -29,7 +30,7 @@ import bitronix.tm.utils.InitializationException;
  */
 public class EwokConfiguration {
     private String zkServers;
-    private int zkSessionTimeout = 5000;
+    private int zkSessionTimeout = 10000;
     private String zkRoot = "ewok";
     // Path to load ledger handles,default is null
     private String loadZkPath;
@@ -74,7 +75,14 @@ public class EwokConfiguration {
                 if (configurationFilename != null) {
                     if (log.isDebugEnabled())
                         log.debug("loading configuration file " + configurationFilename);
-                    in = new FileInputStream(configurationFilename);
+                    try {
+                        in = new FileInputStream(configurationFilename);
+                    }
+                    catch (FileNotFoundException e) {
+                        log.warn("Could not find absolute path: " + configurationFilename
+                                + ",try to load it in classpath");
+                        in = ClassLoaderUtils.getResourceAsStream(configurationFilename);
+                    }
                 }
                 else {
                     if (log.isDebugEnabled())
