@@ -103,20 +103,25 @@ public class EwokConfiguration {
             this.zkServers = getString(properties, "ewok.zkServers", "localhost:2181");
             this.zkSessionTimeout = getInt(properties, "ewok.zkSessionTimeout", 5000);
             this.loadZkPath = getString(properties, "ewok.loadZkPath", null);
-            this.ewokServerId = getString(properties, "ewok.serverId", getLocalHostAddress().toString());
+            this.ewokServerId = getString(properties, "ewok.serverId", getLocalAddress().replaceAll("[\\.\\:]", "-"));
             this.eSize = getInt(properties, "ewok.ensembleSize", 3);
             this.qSize = getInt(properties, "ewok.quorumSize", 2);
             this.password = getString(properties, "ewok.password", "ewok");
             this.cursorBatchSize = getInt(properties, "ewok.cursorBatchSize", 5);
         }
-        catch (IOException ex) {
+        catch (Exception ex) {
             throw new InitializationException("error loading configuration", ex);
         }
     }
 
 
-    // Try to find a valid ipv4 address for using
-    public static InetAddress getLocalHostAddress() throws UnknownHostException, SocketException {
+    /**
+     * Try to find a ipv4 local address except loopback address
+     * 
+     * @return
+     * @throws Exception
+     */
+    public static String getLocalAddress() throws Exception {
         final Enumeration<NetworkInterface> enumeration = NetworkInterface.getNetworkInterfaces();
         InetAddress ipv6Address = null;
         while (enumeration.hasMoreElements()) {
@@ -129,18 +134,28 @@ public class EwokConfiguration {
                         ipv6Address = address;
                     }
                     else {
-                        // 优先使用ipv4
-                        return address;
+                        return normalizeHostAddress(address);
                     }
                 }
+
             }
 
         }
-        // 没有ipv4，则使用ipv6
         if (ipv6Address != null) {
-            return ipv6Address;
+            return normalizeHostAddress(ipv6Address);
         }
-        return InetAddress.getLocalHost();
+        final InetAddress localHost = InetAddress.getLocalHost();
+        return normalizeHostAddress(localHost);
+    }
+
+
+    public static String normalizeHostAddress(final InetAddress localHost) {
+        if (localHost instanceof Inet6Address) {
+            return "[" + localHost.getHostAddress() + "]";
+        }
+        else {
+            return localHost.getHostAddress();
+        }
     }
 
 
