@@ -108,10 +108,4 @@
 	  </plugin>
 	</plugins>
   </reporting>
-
-  <scm>
-	<connection>scm:svn:http://svn.app.taobao.net/repos/distdiamond/trunk/pushit</connection>
-	<developerConnection>scm:svn:http://svn.app.taobao.net/repos/distdiamond/trunk/pushit</developerConnection>
-  </scm>
-
 </project>
