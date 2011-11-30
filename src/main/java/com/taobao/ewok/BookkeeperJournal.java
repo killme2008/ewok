@@ -240,7 +240,7 @@ public class BookkeeperJournal implements Journal {
             }
             catch (KeeperException e) {
                 log.error("Write ids to zookeeper failed", e);
-                if (i == MAX_RETRY_COUNT)
+                if (i == MAX_RETRY_COUNT - 1)
                     throw e;
             }
         }
