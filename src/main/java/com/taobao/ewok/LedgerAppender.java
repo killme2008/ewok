@@ -23,6 +23,7 @@ public class LedgerAppender {
     private EwokConfiguration conf;
     static final Log log = LogFactory.getLog(LedgerAppender.class);
     private BookKeeper bookKeeper;
+    private boolean closed = false;
 
 
     public LedgerAppender(BookKeeper bookKeeper, LedgerHandle handle, EwokConfiguration conf) {
@@ -38,13 +39,16 @@ public class LedgerAppender {
     }
 
 
-    public void close() throws BKException, InterruptedException {
-        this.handle.close();
+    public synchronized void close() throws BKException, InterruptedException {
+        if (this.handle != null && !closed) {
+            this.handle.close();
+            closed = true;
+        }
     }
 
 
     /**
-     * Open a read-only LedgerHandle for reading log
+     * Open a read-only LedgerHandle for reading log in no recovery mode
      * 
      * @return
      * @throws BKException
@@ -53,7 +57,7 @@ public class LedgerAppender {
     public LedgerCursor getCursor() throws BKException, InterruptedException {
         LedgerHandle lh =
                 bookKeeper.openLedgerNoRecovery(handle.getId(), DigestType.CRC32, conf.getPassword().getBytes());
-        long last = lh.getLastAddConfirmed();
+        long last = lh.readLastConfirmed();
         return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
     }
 
@@ -66,7 +70,7 @@ public class LedgerAppender {
      * @throws BKException
      * @throws InterruptedException
      */
-    public boolean writeLog(TransactionLogRecord tlog) throws BKException, InterruptedException {
+    public boolean writeLog(TransactionLogRecord tlog) throws InterruptedException {
         int recordSize = tlog.calculateTotalRecordSize();
         long futureFilePosition = handle.getLength() + recordSize;
         if (futureFilePosition >= conf.getBtmConf().getMaxLogSizeInMb() * 1024 * 1024) {
@@ -95,8 +99,14 @@ public class LedgerAppender {
 
         buf.flip();
 
-        // 暂时都使用同步写入，TODO
-        handle.addEntry(buf.array());
+        try {
+            // 暂时都使用同步写入，TODO
+            handle.addEntry(buf.array());
+        }
+        catch (BKException e) {
+            log.error("Write to bookkeeper failed", e);
+            return false;
+        }
 
         return true;
     }
