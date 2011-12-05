@@ -39,9 +39,10 @@ public class BookkeeperJournal implements Journal {
     private EwokZookeeper ewokZookeeper;
     private BookKeeper bookKeeper;
     private EwokConfiguration conf;
-    private LedgerAppender activeApd;
+    private volatile LedgerAppender activeApd;
     static final Log log = LogFactory.getLog(BookkeeperJournal.class);
     private Set<Long> handles = new HashSet<Long>();
+    private volatile boolean opened = false;
 
 
     EwokZookeeper getEwokZookeeper() {
@@ -133,7 +134,20 @@ public class BookkeeperJournal implements Journal {
 
     public Map collectDanglingRecords() throws IOException {
         try {
-            return collectDanglingRecords(this.activeApd);
+            Map<Uid, TransactionLogRecord> map = collectDanglingRecords(this.activeApd);
+            if (map == null || map.isEmpty())
+                return Collections.EMPTY_MAP;
+            Map<Uid, bitronix.tm.journal.TransactionLogRecord> rt =
+                    new HashMap<Uid, bitronix.tm.journal.TransactionLogRecord>();
+            for (Map.Entry<Uid, TransactionLogRecord> entry : map.entrySet()) {
+                TransactionLogRecord record = entry.getValue();
+                rt.put(
+                    entry.getKey(),
+                    new bitronix.tm.journal.TransactionLogRecord(record.getStatus(), record.getRecordLength(), record
+                        .getHeaderLength(), record.getTime(), record.getSequenceNumber(), record.getCrc32(), record
+                        .getGtrid(), record.getUniqueNames(), record.getEndRecord()));
+            }
+            return rt;
         }
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -144,17 +158,9 @@ public class BookkeeperJournal implements Journal {
         }
     }
 
-    private SyncCounter written;
-
 
     public synchronized void force() throws IOException {
-        try {
-            written.block(0);
-        }
-        catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException(e);
-        }
+
     }
 
 
@@ -177,7 +183,18 @@ public class BookkeeperJournal implements Journal {
      *             open.
      */
     public void log(int status, Uid gtrid, Set uniqueNames) throws IOException {
-        if (activeApd == null)
+        synchronized (this) {
+            while (!opened)
+                try {
+                    this.wait();
+                }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(e);
+                }
+        }
+        LedgerAppender currAppender = activeApd;
+        if (currAppender == null)
             throw new IOException("cannot write log, bookkeeper logger is not open");
 
         if (conf.getBtmConf().isFilterLogStatus()) {
@@ -191,16 +208,26 @@ public class BookkeeperJournal implements Journal {
 
         TransactionLogRecord tlog = new TransactionLogRecord(status, gtrid, uniqueNames);
         try {
-            synchronized (this) {
-                written = activeApd.writeLog(tlog);
-                if (written == null) {
-                    // time to swap log files
-                    swapJournalFiles();
-                    written = activeApd.writeLog(tlog);
-                    if (written == null)
-                        throw new IOException(
-                            "Could not write log to journal even after swap, circular collision avoided");
+            while (true) {
+                boolean written = currAppender.writeLog(tlog);
+                if (!written) {
+                    synchronized (this) {
+
+                        if (currAppender != this.activeApd) {
+                            currAppender = this.activeApd;
+                            continue;
+                        }
+                        // time to swap log files
+                        swapJournalFiles();
+                        currAppender = this.activeApd;
+                        written = currAppender.writeLog(tlog);
+                        if (!written)
+                            throw new IOException(
+                                "Could not write log to journal even after swap, circular collision avoided");
+                    }
                 }
+                else
+                    return;
             }
         }
         catch (KeeperException e) {
@@ -323,6 +350,8 @@ public class BookkeeperJournal implements Journal {
             for (final long id : uniqSet) {
                 deleteLedger(id);
             }
+            this.opened = true;
+            this.notifyAll();
         }
         catch (KeeperException e) {
             throw new IOException(e);

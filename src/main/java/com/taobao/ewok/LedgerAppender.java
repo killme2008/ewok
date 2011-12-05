@@ -67,27 +67,6 @@ public class LedgerAppender {
         }
     }
 
-    private static class SyncAddCallback implements AddCallback {
-        /**
-         * Implementation of callback interface for synchronous read method.
-         * 
-         * @param rc
-         *            return code
-         * @param leder
-         *            ledger identifier
-         * @param entry
-         *            entry identifier
-         * @param ctx
-         *            control object
-         */
-        public void addComplete(int rc, LedgerHandle lh, long entry, Object ctx) {
-            SyncCounter counter = (SyncCounter) ctx;
-
-            counter.setrc(rc);
-            counter.dec();
-        }
-    }
-
 
     /**
      * 写入事务日志
@@ -97,14 +76,14 @@ public class LedgerAppender {
      * @throws BKException
      * @throws InterruptedException
      */
-    public SyncCounter writeLog(TransactionLogRecord tlog) throws InterruptedException {
+    public boolean writeLog(TransactionLogRecord tlog) throws InterruptedException {
         int recordSize = tlog.calculateTotalRecordSize();
         long futureFilePosition = handle.getLength() + recordSize;
         if (futureFilePosition >= conf.getBtmConf().getMaxLogSizeInMb() * 1024 * 1024) {
             if (log.isDebugEnabled())
                 log.debug("log file is full (size would be: " + futureFilePosition + ", max allowed: "
                         + conf.getBtmConf().getMaxLogSizeInMb() + "Mbs");
-            return null;
+            return false;
         }
 
         ByteBuffer buf = ByteBuffer.allocate(recordSize);
@@ -124,11 +103,14 @@ public class LedgerAppender {
         }
         buf.putInt(tlog.getEndRecord());
 
-        buf.flip();
-        SyncCounter counter = new SyncCounter();
-        counter.inc();
         byte[] data = buf.array();
-        handle.asyncAddEntry(data, 0, data.length, new SyncAddCallback(), counter);
-        return counter;
+        try {
+            handle.addEntry(data);
+        }
+        catch (BKException e) {
+            log.error("Write entry to bookkeeper failed", e);
+            return false;
+        }
+        return true;
     }
 }
