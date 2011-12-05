@@ -15,7 +15,7 @@
   <version>1.0.0-SNAPSHOT</version>
 
   <build>
-	<finalName>pushit</finalName>
+	<finalName>ewok</finalName>
 	<plugins>
 	  <plugin>
 		<groupId>com.atlassian.maven.plugins</groupId>

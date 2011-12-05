@@ -144,10 +144,17 @@ public class BookkeeperJournal implements Journal {
         }
     }
 
+    private SyncCounter written;
 
-    public void force() throws IOException {
-        // ignore
-        // Store entries in forcing way by default.
+
+    public synchronized void force() throws IOException {
+        try {
+            written.block(0);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        }
     }
 
 
@@ -185,12 +192,12 @@ public class BookkeeperJournal implements Journal {
         TransactionLogRecord tlog = new TransactionLogRecord(status, gtrid, uniqueNames);
         try {
             synchronized (this) {
-                boolean written = activeApd.writeLog(tlog);
-                if (!written) {
+                written = activeApd.writeLog(tlog);
+                if (written == null) {
                     // time to swap log files
                     swapJournalFiles();
                     written = activeApd.writeLog(tlog);
-                    if (!written)
+                    if (written == null)
                         throw new IOException(
                             "Could not write log to journal even after swap, circular collision avoided");
                 }
@@ -214,6 +221,7 @@ public class BookkeeperJournal implements Journal {
 
 
     synchronized void swapJournalFiles() throws InterruptedException, BKException, KeeperException, IOException {
+        this.force();
         LedgerAppender passiveApd = null;
         for (int i = 0; i < MAX_RETRY_COUNT; i++) {
             try {
