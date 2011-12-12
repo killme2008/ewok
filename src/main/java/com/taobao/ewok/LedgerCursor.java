@@ -58,37 +58,41 @@ public class LedgerCursor {
             LedgerEntry entry = iterator.nextElement();
             if (entry != null) {
                 DataInputStream in = new DataInputStream(entry.getEntryInputStream());
-                int status = in.readInt();
-                int recordLen = in.readInt();
-                int headerLen = in.readInt();
-                long time = in.readLong();
-                int seqNo = in.readInt();
-                int crc32 = in.readInt();
-                byte gtridLen = in.readByte();
-                byte[] gtridArray = new byte[gtridLen];
-                in.read(gtridArray);
-                Uid gtrid = new Uid(gtridArray);
-                int uniqueNamesCount = in.readInt();
-                Set<String> uniqueNames = new HashSet<String>();
+                if (in.available() > 4) {
+                    int status = in.readInt();
+                    int recordLen = in.readInt();
+                    int headerLen = in.readInt();
+                    long time = in.readLong();
+                    int seqNo = in.readInt();
+                    int crc32 = in.readInt();
+                    byte gtridLen = in.readByte();
+                    byte[] gtridArray = new byte[gtridLen];
+                    in.read(gtridArray);
+                    Uid gtrid = new Uid(gtridArray);
+                    int uniqueNamesCount = in.readInt();
+                    Set<String> uniqueNames = new HashSet<String>();
 
-                for (int i = 0; i < uniqueNamesCount; i++) {
-                    int length = in.readShort();
+                    for (int i = 0; i < uniqueNamesCount; i++) {
+                        int length = in.readShort();
 
-                    byte[] nameBytes = new byte[length];
-                    in.read(nameBytes);
-                    uniqueNames.add(new String(nameBytes, "US-ASCII"));
+                        byte[] nameBytes = new byte[length];
+                        in.read(nameBytes);
+                        uniqueNames.add(new String(nameBytes, "US-ASCII"));
+                    }
+                    int cEndRecord = in.readInt();
+
+                    TransactionLogRecord tlog =
+                            new TransactionLogRecord(status, recordLen, headerLen, time, seqNo, crc32, gtrid,
+                                uniqueNames, cEndRecord);
+                    if (!skipCrcCheck && !tlog.isCrc32Correct()) {
+                        throw new CorruptedTransactionLogException("corrupted log found at entry " + entry.getEntryId()
+                                + "(invalid CRC, recorded: " + tlog.getCrc32() + ", calculated: "
+                                + tlog.calculateCrc32() + ")");
+                    }
+                    return tlog;
                 }
-                int cEndRecord = in.readInt();
-
-                TransactionLogRecord tlog =
-                        new TransactionLogRecord(status, recordLen, headerLen, time, seqNo, crc32, gtrid, uniqueNames,
-                            cEndRecord);
-                if (!skipCrcCheck && !tlog.isCrc32Correct()) {
-                    throw new CorruptedTransactionLogException("corrupted log found at entry " + entry.getEntryId()
-                            + "(invalid CRC, recorded: " + tlog.getCrc32() + ", calculated: " + tlog.calculateCrc32()
-                            + ")");
-                }
-                return tlog;
+                else
+                    return null;
 
             }
         }

@@ -34,7 +34,7 @@ public class BookkeeperJournalUnitTest {
     @Test
     public void testOpen() throws Exception {
         this.journal.open();
-        assertNotNull(this.journal.getActiveApd());
+        assertNotNull(this.journal.getCurrentAppender());
         Set<Long> handles = this.journal.getHandles();
         assertFalse(handles.isEmpty());
         System.out.println(handles);
@@ -53,14 +53,14 @@ public class BookkeeperJournalUnitTest {
         this.journal.log(Status.STATUS_PREPARING, commitedUid, uniqueNames);
         this.journal.log(Status.STATUS_PREPARED, commitedUid, uniqueNames);
         this.journal.log(Status.STATUS_COMMITTING, commitedUid, uniqueNames);
+        this.journal.force();
         this.journal.log(Status.STATUS_COMMITTED, commitedUid, uniqueNames);
-
         Uid committingUid = UidGenerator.generateUid();
         this.journal.log(Status.STATUS_ACTIVE, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_PREPARING, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_PREPARED, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_COMMITTING, committingUid, uniqueNames);
-
+        this.journal.force();
         checkDanglingRecords(uniqueNames, committingUid);
 
         this.journal.close();
@@ -73,11 +73,11 @@ public class BookkeeperJournalUnitTest {
 
 
     private void checkDanglingRecords(Set<String> uniqueNames, Uid committingUid) throws IOException {
-        Map<Uid, TransactionLogRecord> map = this.journal.collectDanglingRecords();
+        Map<Uid, bitronix.tm.journal.TransactionLogRecord> map = this.journal.collectDanglingRecords();
         assertNotNull(map);
         assertEquals(1, map.size());
         assertTrue(map.containsKey(committingUid));
-        TransactionLogRecord rc = map.get(committingUid);
+        bitronix.tm.journal.TransactionLogRecord rc = map.get(committingUid);
         assertEquals(committingUid, rc.getGtrid());
         assertEquals(Status.STATUS_COMMITTING, rc.getStatus());
         assertEquals(uniqueNames, rc.getUniqueNames());

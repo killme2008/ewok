@@ -8,6 +8,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.transaction.Status;
 
@@ -39,7 +43,7 @@ public class BookkeeperJournal implements Journal {
     private EwokZookeeper ewokZookeeper;
     private BookKeeper bookKeeper;
     private EwokConfiguration conf;
-    private volatile LedgerAppender activeApd;
+    private AtomicReference<FutureTask<LedgerAppender>> activeApd;
     static final Log log = LogFactory.getLog(BookkeeperJournal.class);
     private Set<Long> handles = new HashSet<Long>();
     private volatile boolean opened = false;
@@ -100,9 +104,10 @@ public class BookkeeperJournal implements Journal {
 
     public synchronized void close() throws IOException {
         try {
+            this.force();
             if (this.activeApd != null) {
                 try {
-                    this.activeApd.close();
+                    getCurrentAppender().close();
                     this.activeApd = null;
                 }
                 catch (BKException e) {
@@ -134,7 +139,7 @@ public class BookkeeperJournal implements Journal {
 
     public Map collectDanglingRecords() throws IOException {
         try {
-            Map<Uid, TransactionLogRecord> map = collectDanglingRecords(this.activeApd);
+            Map<Uid, TransactionLogRecord> map = collectDanglingRecords(getCurrentAppender());
             if (map == null || map.isEmpty())
                 return Collections.EMPTY_MAP;
             Map<Uid, bitronix.tm.journal.TransactionLogRecord> rt =
@@ -159,8 +164,8 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    public synchronized void force() throws IOException {
-
+    public void force() throws IOException {
+        getCurrentAppender().force();
     }
 
 
@@ -193,8 +198,8 @@ public class BookkeeperJournal implements Journal {
                     throw new IOException(e);
                 }
         }
-        LedgerAppender currAppender = activeApd;
-        if (currAppender == null)
+        FutureTask<LedgerAppender> currAppenderTask = this.activeApd.get();
+        if (currAppenderTask == null)
             throw new IOException("cannot write log, bookkeeper logger is not open");
 
         if (conf.getBtmConf().isFilterLogStatus()) {
@@ -209,35 +214,32 @@ public class BookkeeperJournal implements Journal {
         TransactionLogRecord tlog = new TransactionLogRecord(status, gtrid, uniqueNames);
         try {
             while (true) {
-                boolean written = currAppender.writeLog(tlog);
-                if (!written) {
-                    synchronized (this) {
-
-                        if (currAppender != this.activeApd) {
-                            currAppender = this.activeApd;
-                            continue;
+                final LedgerAppender currentAppender = currAppenderTask.get();
+                SyncCounter written = currentAppender.writeLog(tlog);
+                if (written == null) {
+                    FutureTask<LedgerAppender> newTask = new FutureTask<LedgerAppender>(new Callable<LedgerAppender>() {
+                        public LedgerAppender call() throws Exception {
+                            return swapJournalFiles(currentAppender);
                         }
-                        // time to swap log files
-                        swapJournalFiles();
-                        currAppender = this.activeApd;
-                        written = currAppender.writeLog(tlog);
-                        if (!written)
-                            throw new IOException(
-                                "Could not write log to journal even after swap, circular collision avoided");
+
+                    });
+                    if (this.activeApd.compareAndSet(currAppenderTask, newTask)) {
+                        newTask.run();
                     }
+                    currAppenderTask = this.activeApd.get();
                 }
                 else
                     return;
             }
         }
-        catch (KeeperException e) {
+        catch (ExecutionException e) {
             throw new IOException("Could not write log to bookkeeper", e);
         }
         catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException(e);
         }
-        catch (BKException e) {
+        catch (Exception e) {
             // TODO create a new ledger?
             throw new IOException("Could not write log to bookkeeper", e);
         }
@@ -247,7 +249,8 @@ public class BookkeeperJournal implements Journal {
     static final int MAX_RETRY_COUNT = 3;
 
 
-    synchronized void swapJournalFiles() throws InterruptedException, BKException, KeeperException, IOException {
+    synchronized LedgerAppender swapJournalFiles(LedgerAppender oldAppender) throws InterruptedException, BKException,
+            KeeperException, IOException {
         this.force();
         LedgerAppender passiveApd = null;
         for (int i = 0; i < MAX_RETRY_COUNT; i++) {
@@ -262,8 +265,8 @@ public class BookkeeperJournal implements Journal {
         }
         if (passiveApd == null)
             throw new IOException("Could not create a new ledger");
-        copyDanglingRecords(activeApd, passiveApd);
-        long oldId = activeApd.getHandle().getId();
+        copyDanglingRecords(oldAppender, passiveApd);
+        long oldId = oldAppender.getHandle().getId();
         boolean removed = this.handles.remove(oldId);
         assert (removed);
         boolean added = this.handles.add(passiveApd.getHandle().getId());
@@ -279,9 +282,9 @@ public class BookkeeperJournal implements Journal {
                     throw e;
             }
         }
-        activeApd.close();
+        oldAppender.close();
         deleteLedger(oldId);
-        activeApd = passiveApd;
+        return passiveApd;
     }
 
 
@@ -313,11 +316,6 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    LedgerAppender getActiveApd() {
-        return activeApd;
-    }
-
-
     Set<Long> getHandles() {
         return handles;
     }
@@ -325,7 +323,16 @@ public class BookkeeperJournal implements Journal {
 
     public synchronized void open() throws IOException {
         try {
-            this.activeApd = createNewLedgerAppender(bookKeeper, conf);
+            this.activeApd = new AtomicReference<FutureTask<LedgerAppender>>();
+            FutureTask<LedgerAppender> task = new FutureTask<LedgerAppender>(new Callable<LedgerAppender>() {
+                public LedgerAppender call() throws Exception {
+                    return createNewLedgerAppender(bookKeeper, conf);
+                }
+
+            });
+            // Run it right now.
+            task.run();
+            this.activeApd.set(task);
             Set<Long> myExistsIds = this.ewokZookeeper.readLogIds();
             Set<Long> loadExistsIds = this.ewokZookeeper.readLogIds(conf.getLoadZkPath());
             Set<Long> uniqSet = new HashSet<Long>(myExistsIds);
@@ -338,15 +345,24 @@ public class BookkeeperJournal implements Journal {
                 Collections.sort(sortedIds);
                 for (long id : sortedIds) {
                     LedgerCursor cursor = getCursor(id);
-                    if (cursor != null)
-                        copyDanglingRecords(cursor, this.activeApd);
+                    if (cursor != null) {
+                        try {
+                            copyDanglingRecords(cursor, getCurrentAppender());
+                            this.force();
+                        }
+                        finally {
+                            cursor.close();
+                        }
+                    }
+
                 }
             }
             // Copy all dangling records done,then store the new handle to zk
-            this.handles.add(this.activeApd.getHandle().getId());
+            this.handles.add(getCurrentAppender().getHandle().getId());
             this.ewokZookeeper.writeLogIds(this.handles);
 
             // Now it's safe to delete old ledgers
+
             for (final long id : uniqSet) {
                 deleteLedger(id);
             }
@@ -362,6 +378,20 @@ public class BookkeeperJournal implements Journal {
         }
         catch (BKException e) {
             throw new IOException(e);
+        }
+    }
+
+
+    LedgerAppender getCurrentAppender() {
+        try {
+            return this.activeApd.get().get();
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Get current appender failed", e);
+        }
+        catch (ExecutionException e) {
+            throw new IllegalStateException("Get current appender failed");
         }
     }
 
@@ -459,55 +489,52 @@ public class BookkeeperJournal implements Journal {
     private static Map<Uid, TransactionLogRecord> collectDanglingRecords(LedgerCursor tlc) throws IOException,
             BKException, InterruptedException, CorruptedTransactionLogException {
         Map<Uid, TransactionLogRecord> danglingRecords = new HashMap<Uid, TransactionLogRecord>(64);
-        try {
-            int committing = 0;
-            int committed = 0;
 
-            while (true) {
-                TransactionLogRecord tlog;
-                try {
-                    tlog = tlc.readLog();
+        int committing = 0;
+        int committed = 0;
+
+        while (true) {
+            TransactionLogRecord tlog;
+            try {
+                tlog = tlc.readLog();
+            }
+            catch (CorruptedTransactionLogException ex) {
+                if (TransactionManagerServices.getConfiguration().isSkipCorruptedLogs()) {
+                    log.error("skipping corrupted log", ex);
+                    continue;
                 }
-                catch (CorruptedTransactionLogException ex) {
-                    if (TransactionManagerServices.getConfiguration().isSkipCorruptedLogs()) {
-                        log.error("skipping corrupted log", ex);
-                        continue;
+                throw ex;
+            }
+
+            if (tlog == null)
+                break;
+
+            int status = tlog.getStatus();
+            if (status == Status.STATUS_COMMITTING) {
+                danglingRecords.put(tlog.getGtrid(), tlog);
+                committing++;
+            }
+            if (status == Status.STATUS_COMMITTED || status == Status.STATUS_UNKNOWN) {
+                TransactionLogRecord rec = danglingRecords.get(tlog.getGtrid());
+                if (rec != null) {
+                    Set<String> recUniqueNames = new HashSet<String>(rec.getUniqueNames());
+                    recUniqueNames.removeAll(tlog.getUniqueNames());
+                    if (recUniqueNames.isEmpty()) {
+                        danglingRecords.remove(tlog.getGtrid());
+                        committed++;
                     }
-                    throw ex;
-                }
-
-                if (tlog == null)
-                    break;
-
-                int status = tlog.getStatus();
-                if (status == Status.STATUS_COMMITTING) {
-                    danglingRecords.put(tlog.getGtrid(), tlog);
-                    committing++;
-                }
-                if (status == Status.STATUS_COMMITTED || status == Status.STATUS_UNKNOWN) {
-                    TransactionLogRecord rec = danglingRecords.get(tlog.getGtrid());
-                    if (rec != null) {
-                        Set<String> recUniqueNames = new HashSet<String>(rec.getUniqueNames());
-                        recUniqueNames.removeAll(tlog.getUniqueNames());
-                        if (recUniqueNames.isEmpty()) {
-                            danglingRecords.remove(tlog.getGtrid());
-                            committed++;
-                        }
-                        else {
-                            danglingRecords.put(tlog.getGtrid(),
-                                new TransactionLogRecord(rec.getStatus(), rec.getGtrid(), recUniqueNames));
-                        }
+                    else {
+                        danglingRecords.put(tlog.getGtrid(), new TransactionLogRecord(rec.getStatus(), rec.getGtrid(),
+                            recUniqueNames));
                     }
                 }
             }
+        }
 
-            if (log.isDebugEnabled())
-                log.debug("collected dangling records of " + tlc.getHandle().getId() + ", committing: " + committing
-                        + ", committed: " + committed + ", delta: " + danglingRecords.size());
-        }
-        finally {
-            tlc.close();
-        }
+        if (log.isDebugEnabled())
+            log.debug("collected dangling records of " + tlc.getHandle().getId() + ", committing: " + committing
+                    + ", committed: " + committed + ", delta: " + danglingRecords.size());
+
         return danglingRecords;
     }
 

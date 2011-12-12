@@ -57,6 +57,7 @@ public class LedgerAppenderUnitTest {
         this.appender.writeLog(tlog);
 
         // Get cursor to read logs
+        this.appender.force();
         LedgerCursor cursor = this.appender.getCursor();
         assertNotNull(cursor);
         TransactionLogRecord record = cursor.readLog(false);
@@ -77,6 +78,7 @@ public class LedgerAppenderUnitTest {
         this.appender.writeLog(tlog);
         tlog = new TransactionLogRecord(Status.STATUS_ROLLEDBACK, uid2, resourceNames);
         this.appender.writeLog(tlog);
+        this.appender.force();
 
         checkLogs(uid1, resourceNames, uid2);
 
