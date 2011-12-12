@@ -78,7 +78,10 @@ public class EwokZookeeper {
         if (data == null)
             return Collections.emptySet();
         else {
-            Set<Map> set = JSON.parseObject(new String(data), Set.class);
+            String json = new String(data);
+            if (StringUtils.isEmpty(json.trim()))
+                return Collections.emptySet();
+            Set<Map> set = JSON.parseObject(json, Set.class);
             Set<HandleState> rt = new HashSet<HandleState>();
             for (Map map : set) {
                 rt.add(new HandleState(getLong(map.get("id")), getLong(map.get("checkpoint"))));
