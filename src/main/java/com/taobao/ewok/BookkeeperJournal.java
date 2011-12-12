@@ -268,9 +268,9 @@ public class BookkeeperJournal implements Journal {
     static final int MAX_RETRY_COUNT = 3;
 
 
-    synchronized LedgerAppender swapJournalFiles(LedgerAppender oldAppender) throws InterruptedException, BKException,
+    LedgerAppender swapJournalFiles(LedgerAppender oldAppender) throws InterruptedException, BKException,
             KeeperException, IOException {
-        this.force();
+        oldAppender.force();
         LedgerAppender passiveApd = null;
         for (int i = 0; i < MAX_RETRY_COUNT; i++) {
             try {
@@ -505,23 +505,22 @@ public class BookkeeperJournal implements Journal {
 
 
     private static Map<Uid, TransactionLogRecord> collectDanglingRecords(LedgerCursor tlc) throws IOException,
-            BKException, InterruptedException, CorruptedTransactionLogException {
+            InterruptedException, CorruptedTransactionLogException {
         Map<Uid, TransactionLogRecord> danglingRecords = new HashMap<Uid, TransactionLogRecord>(64);
 
         int committing = 0;
         int committed = 0;
 
         while (true) {
-            TransactionLogRecord tlog;
+            TransactionLogRecord tlog = null;
             try {
                 tlog = tlc.readLog();
             }
-            catch (CorruptedTransactionLogException ex) {
+            catch (BKException ex) {
                 if (TransactionManagerServices.getConfiguration().isSkipCorruptedLogs()) {
                     log.error("skipping corrupted log", ex);
                     continue;
                 }
-                throw ex;
             }
 
             if (tlog == null)
