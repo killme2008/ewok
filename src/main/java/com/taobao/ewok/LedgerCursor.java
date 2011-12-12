@@ -29,8 +29,9 @@ public class LedgerCursor {
     private Enumeration<LedgerEntry> iterator;
 
 
-    public LedgerCursor(long lastEntry, int batchSize, LedgerHandle handle) {
+    public LedgerCursor(long startEntry,long lastEntry, int batchSize, LedgerHandle handle) {
         super();
+        this.startEntry=startEntry;
         this.lastEntry = lastEntry;
         this.batchSize = batchSize;
         this.handle = handle;
@@ -89,6 +90,8 @@ public class LedgerCursor {
                                 + "(invalid CRC, recorded: " + tlog.getCrc32() + ", calculated: "
                                 + tlog.calculateCrc32() + ")");
                     }
+                    // set entry id for checkpoint
+                    tlog.setEntryId(entry.getEntryId());
                     return tlog;
                 }
                 else

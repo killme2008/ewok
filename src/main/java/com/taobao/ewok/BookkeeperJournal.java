@@ -45,7 +45,7 @@ public class BookkeeperJournal implements Journal {
     private EwokConfiguration conf;
     private AtomicReference<FutureTask<LedgerAppender>> activeApd;
     static final Log log = LogFactory.getLog(BookkeeperJournal.class);
-    private Set<Long> handles = new HashSet<Long>();
+    private Set<HandleState> handles = new HashSet<HandleState>();
     private volatile boolean opened = false;
 
 
@@ -139,11 +139,16 @@ public class BookkeeperJournal implements Journal {
 
     public Map collectDanglingRecords() throws IOException {
         try {
-            Map<Uid, TransactionLogRecord> map = collectDanglingRecords(getCurrentAppender());
+            LedgerAppender currentAppender = getCurrentAppender();
+            if (currentAppender == null) {
+                return Collections.EMPTY_MAP;
+            }
+            Map<Uid, TransactionLogRecord> map = collectDanglingRecords(currentAppender);
             if (map == null || map.isEmpty())
                 return Collections.EMPTY_MAP;
             Map<Uid, bitronix.tm.journal.TransactionLogRecord> rt =
                     new HashMap<Uid, bitronix.tm.journal.TransactionLogRecord>();
+            long minEntryId = -1;
             for (Map.Entry<Uid, TransactionLogRecord> entry : map.entrySet()) {
                 TransactionLogRecord record = entry.getValue();
                 rt.put(
@@ -151,6 +156,20 @@ public class BookkeeperJournal implements Journal {
                     new bitronix.tm.journal.TransactionLogRecord(record.getStatus(), record.getRecordLength(), record
                         .getHeaderLength(), record.getTime(), record.getSequenceNumber(), record.getCrc32(), record
                         .getGtrid(), record.getUniqueNames(), record.getEndRecord()));
+                if (record.getEntryId() < minEntryId || minEntryId == -1) {
+                    minEntryId = record.getEntryId();
+                }
+            }
+            HandleState state = currentAppender.getState();
+            if (minEntryId > 0 && minEntryId > state.checkpoint) {
+                // Update checkpoint
+                state.checkpoint = minEntryId;
+                try {
+                    this.ewokZookeeper.writeHandles(this.handles);
+                }
+                catch (KeeperException e) {
+                    log.error("Update checkpoint failed", e);
+                }
             }
             return rt;
         }
@@ -266,14 +285,13 @@ public class BookkeeperJournal implements Journal {
         if (passiveApd == null)
             throw new IOException("Could not create a new ledger");
         copyDanglingRecords(oldAppender, passiveApd);
-        long oldId = oldAppender.getHandle().getId();
-        boolean removed = this.handles.remove(oldId);
+        boolean removed = this.handles.remove(oldAppender.getState());
         assert (removed);
-        boolean added = this.handles.add(passiveApd.getHandle().getId());
+        boolean added = this.handles.add(passiveApd.getState());
         assert (added);
         for (int i = 0; i < MAX_RETRY_COUNT; i++) {
             try {
-                this.ewokZookeeper.writeLogIds(handles);
+                this.ewokZookeeper.writeHandles(handles);
                 break;
             }
             catch (KeeperException e) {
@@ -283,6 +301,7 @@ public class BookkeeperJournal implements Journal {
             }
         }
         oldAppender.close();
+        long oldId = oldAppender.getHandle().getId();
         deleteLedger(oldId);
         return passiveApd;
     }
@@ -295,11 +314,11 @@ public class BookkeeperJournal implements Journal {
      * @throws BKException
      * @throws InterruptedException
      */
-    LedgerCursor getCursor(long id) throws BKException, InterruptedException {
+    LedgerCursor getCursor(HandleState state) throws BKException, InterruptedException {
         try {
-            LedgerHandle lh = bookKeeper.openLedger(id, DigestType.CRC32, conf.getPassword().getBytes());
+            LedgerHandle lh = bookKeeper.openLedger(state.id, DigestType.CRC32, conf.getPassword().getBytes());
             long last = lh.getLastAddConfirmed();
-            return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+            return new LedgerCursor(state.checkpoint, last, conf.getCursorBatchSize(), lh);
         }
         catch (BKException e) {
             if (e.getCode() == BKException.Code.NoSuchLedgerExistsException) {
@@ -316,7 +335,7 @@ public class BookkeeperJournal implements Journal {
     }
 
 
-    Set<Long> getHandles() {
+    Set<HandleState> getHandles() {
         return handles;
     }
 
@@ -333,18 +352,18 @@ public class BookkeeperJournal implements Journal {
             // Run it right now.
             task.run();
             this.activeApd.set(task);
-            Set<Long> myExistsIds = this.ewokZookeeper.readLogIds();
-            Set<Long> loadExistsIds = this.ewokZookeeper.readLogIds(conf.getLoadZkPath());
-            Set<Long> uniqSet = new HashSet<Long>(myExistsIds);
-            uniqSet.addAll(loadExistsIds);
-            if (myExistsIds.isEmpty() && loadExistsIds.isEmpty()) {
+            Set<HandleState> existsHandles = this.ewokZookeeper.readHandles();
+            Set<HandleState> loadHandles = this.ewokZookeeper.readHandles(conf.getLoadZkPath());
+            Set<HandleState> uniqSet = new HashSet<HandleState>(existsHandles);
+            uniqSet.addAll(loadHandles);
+            if (existsHandles.isEmpty() && loadHandles.isEmpty()) {
                 // No log history
             }
             else {
-                List<Long> sortedIds = new ArrayList<Long>(uniqSet);
-                Collections.sort(sortedIds);
-                for (long id : sortedIds) {
-                    LedgerCursor cursor = getCursor(id);
+                List<HandleState> sortedHandles = new ArrayList<HandleState>(uniqSet);
+                Collections.sort(sortedHandles);
+                for (HandleState state : sortedHandles) {
+                    LedgerCursor cursor = getCursor(state);
                     if (cursor != null) {
                         try {
                             copyDanglingRecords(cursor, getCurrentAppender());
@@ -358,13 +377,13 @@ public class BookkeeperJournal implements Journal {
                 }
             }
             // Copy all dangling records done,then store the new handle to zk
-            this.handles.add(getCurrentAppender().getHandle().getId());
-            this.ewokZookeeper.writeLogIds(this.handles);
+            this.handles.add(getCurrentAppender().getState());
+            this.ewokZookeeper.writeHandles(this.handles);
 
             // Now it's safe to delete old ledgers
 
-            for (final long id : uniqSet) {
-                deleteLedger(id);
+            for (final HandleState state : uniqSet) {
+                deleteLedger(state.id);
             }
             this.opened = true;
             this.notifyAll();
@@ -418,7 +437,7 @@ public class BookkeeperJournal implements Journal {
                 bookKeeper.createLedger(conf.getESize(), conf.getQSize(), DigestType.CRC32, conf.getPassword()
                     .getBytes());
         log.warn("Create a new ledger:" + lh.getId());
-        return new LedgerAppender(bookKeeper, lh, conf);
+        return new LedgerAppender(bookKeeper, lh, new HandleState(lh.getId(), 0), conf);
     }
 
 
@@ -477,8 +496,7 @@ public class BookkeeperJournal implements Journal {
      */
     private static Map<Uid, TransactionLogRecord> collectDanglingRecords(LedgerAppender tla) throws IOException,
             BKException, InterruptedException {
-
-        LedgerCursor tlc = tla.getCursor();
+        LedgerCursor tlc = tla.getCursor(tla.getState().checkpoint);
         if (tlc != null)
             return collectDanglingRecords(tlc);
         else

@@ -23,11 +23,11 @@ public class BookkeeperJournalUnitTest {
     @Before
     public void setUp() throws Exception {
         this.journal = new BookkeeperJournal();
-        Set<Long> ids = this.journal.getEwokZookeeper().readLogIds();
-        for (Long id : ids) {
-            this.journal.deleteLedger(id);
+        Set<HandleState> states = this.journal.getEwokZookeeper().readHandles();
+        for (HandleState state : states) {
+            this.journal.deleteLedger(state.id);
         }
-        this.journal.getEwokZookeeper().writeLogIds(new HashSet<Long>());
+        this.journal.getEwokZookeeper().writeHandles(new HashSet<HandleState>());
     }
 
 
@@ -35,7 +35,7 @@ public class BookkeeperJournalUnitTest {
     public void testOpen() throws Exception {
         this.journal.open();
         assertNotNull(this.journal.getCurrentAppender());
-        Set<Long> handles = this.journal.getHandles();
+        Set<HandleState> handles = this.journal.getHandles();
         assertFalse(handles.isEmpty());
         System.out.println(handles);
 

@@ -26,11 +26,18 @@ public class LedgerAppender {
     static final Log log = LogFactory.getLog(LedgerAppender.class);
     private BookKeeper bookKeeper;
     private boolean closed = false;
+    private HandleState state;
 
 
-    public LedgerAppender(BookKeeper bookKeeper, LedgerHandle handle, EwokConfiguration conf) {
+    public HandleState getState() {
+        return state;
+    }
+
+
+    public LedgerAppender(BookKeeper bookKeeper, LedgerHandle handle, HandleState state, EwokConfiguration conf) {
         super();
         this.bookKeeper = bookKeeper;
+        this.state = state;
         this.handle = handle;
         this.conf = conf;
     }
@@ -55,21 +62,35 @@ public class LedgerAppender {
 
 
     /**
-     * Open a read-only LedgerHandle for reading log in no recovery mode
+     * Open a read-only LedgerHandle for reading log in no recovery mode from
+     * beginning
      * 
      * @return
      * @throws BKException
      * @throws InterruptedException
      */
     public synchronized LedgerCursor getCursor() throws BKException, InterruptedException {
+        return getCursor(0);
+    }
+
+
+    /**
+     * Open a read-only LedgerHandle for reading log in no recovery mode from
+     * start entry
+     * 
+     * @return
+     * @throws BKException
+     * @throws InterruptedException
+     */
+    public synchronized LedgerCursor getCursor(long startEntry) throws BKException, InterruptedException {
         if (closed) {
             LedgerHandle lh =
                     bookKeeper.openLedgerNoRecovery(handle.getId(), DigestType.CRC32, conf.getPassword().getBytes());
             long last = lh.getLastAddConfirmed();
-            return new LedgerCursor(last, conf.getCursorBatchSize(), lh);
+            return new LedgerCursor(startEntry, last, conf.getCursorBatchSize(), lh);
         }
         else {
-            return new LedgerCursor(this.handle.getLastAddConfirmed(), conf.getCursorBatchSize(), handle);
+            return new LedgerCursor(startEntry, this.handle.getLastAddConfirmed(), conf.getCursorBatchSize(), handle);
         }
     }
 

@@ -83,7 +83,7 @@ import java.util.zip.CRC32;
  *      Exposed, Part III: The Implementor's Notebook</a>
  * @author lorban
  */
-public class TransactionLogRecord {
+public class TransactionLogRecord implements Comparable<TransactionLogRecord> {
     /**
      * int-encoded "xntB" ASCII string. This will be useful after swapping log
      * files since we will potentially overwrite old logs not necessarily of the
@@ -104,6 +104,7 @@ public class TransactionLogRecord {
     private final Uid gtrid;
     private final SortedSet<String> uniqueNames;
     private final int endRecord;
+    private long entryId;
 
 
     /**
@@ -142,6 +143,18 @@ public class TransactionLogRecord {
     }
 
 
+    public int compareTo(TransactionLogRecord o) {
+        if (o == null)
+            return 1;
+        if (this.entryId > o.entryId)
+            return 1;
+        else if (this.entryId < o.entryId)
+            return -1;
+        else
+            return 0;
+    }
+
+
     /**
      * Create a new transaction log ready to be stored.
      * 
@@ -163,6 +176,16 @@ public class TransactionLogRecord {
         this.recordLength = calculateRecordLength(this.uniqueNames);
         this.headerLength = getRecordHeaderLength();
         this.crc32 = calculateCrc32();
+    }
+
+
+    public long getEntryId() {
+        return entryId;
+    }
+
+
+    public void setEntryId(long entryId) {
+        this.entryId = entryId;
     }
 
 

@@ -3,6 +3,7 @@ package com.taobao.ewok;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.commons.lang.StringUtils;
@@ -16,6 +17,9 @@ import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.serializer.SerializerFeature;
 
 
 /**
@@ -62,52 +66,37 @@ public class EwokZookeeper {
     }
 
 
-    public Set<Long> readLogIds() throws InterruptedException, KeeperException {
-        return this.readLogIds(this.serverIdPath);
+    public Set<HandleState> readHandles() throws InterruptedException, KeeperException {
+        return this.readHandles(this.serverIdPath);
     }
 
 
-    public Set<Long> readLogIds(String path) throws InterruptedException, KeeperException {
+    public Set<HandleState> readHandles(String path) throws InterruptedException, KeeperException {
         if (StringUtils.isBlank(path))
             return Collections.emptySet();
         byte[] data = zk.getData(path, false, null);
         if (data == null)
             return Collections.emptySet();
         else {
-            String[] tmps = new String(data).split(SPLIT);
-            Set<Long> rt = new HashSet<Long>();
-            for (String tmp : tmps) {
-                if (!StringUtils.isBlank(tmp))
-                    rt.add(Long.valueOf(tmp));
-
+            Set<Map> set = JSON.parseObject(new String(data), Set.class);
+            Set<HandleState> rt = new HashSet<HandleState>();
+            for (Map map : set) {
+                rt.add(new HandleState(getLong(map.get("id")), getLong(map.get("checkpoint"))));
             }
             return rt;
         }
     }
 
+
+    private long getLong(Object v) {
+        return Long.valueOf(String.valueOf(v));
+    }
+
     static final String SPLIT = ",";
 
 
-    private String join(Set<Long> ids) {
-        if (ids == null)
-            return "";
-        StringBuilder sb = new StringBuilder();
-        boolean wasFirst = true;
-        for (long id : ids) {
-            if (wasFirst) {
-                sb.append(id);
-                wasFirst = false;
-            }
-            else {
-                sb.append(",").append(id);
-            }
-        }
-        return sb.toString();
-    }
-
-
-    public void writeLogIds(Set<Long> ids) throws InterruptedException, KeeperException {
-        zk.setData(serverIdPath, join(ids).getBytes(), -1);
+    public void writeHandles(Set<HandleState> ids) throws InterruptedException, KeeperException {
+        zk.setData(serverIdPath, JSON.toJSONString(ids).getBytes(), -1);
     }
 
 

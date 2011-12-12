@@ -47,39 +47,44 @@ public class EwokZookeeperUnitTest {
 
     @Test
     public void testReadIdsWriteIdsReadIds() throws Exception {
-        assertTrue(this.ez.readLogIds().isEmpty());
-        Set<Long> sets = new HashSet<Long>();
-        sets.add(1L);
-        this.ez.writeLogIds(sets);
-        Set<Long> idsFromZk = this.ez.readLogIds();
+        assertTrue(this.ez.readHandles().isEmpty());
+        Set<HandleState> sets = new HashSet<HandleState>();
+        HandleState state = new HandleState(1, 0);
+        sets.add(state);
+        this.ez.writeHandles(sets);
+        Set<HandleState> idsFromZk = this.ez.readHandles();
         assertFalse(idsFromZk.isEmpty());
         assertEquals(1, idsFromZk.size());
-        assertTrue(idsFromZk.contains(1L));
+        assertTrue(idsFromZk.contains(state));
     }
 
 
     @Test
     public void WriteTwice() throws Exception {
-        assertTrue(this.ez.readLogIds().isEmpty());
-        Set<Long> sets = new HashSet<Long>();
-        sets.add(1L);
-        this.ez.writeLogIds(sets);
-        Set<Long> idsFromZk = this.ez.readLogIds();
+        assertTrue(this.ez.readHandles().isEmpty());
+        Set<HandleState> sets = new HashSet<HandleState>();
+        HandleState state = new HandleState(1, 0);
+        sets.add(state);
+        ;
+        this.ez.writeHandles(sets);
+        Set<HandleState> idsFromZk = this.ez.readHandles();
         assertFalse(idsFromZk.isEmpty());
         assertEquals(1, idsFromZk.size());
-        assertTrue(idsFromZk.contains(1L));
+        assertTrue(idsFromZk.contains(state));
 
-        sets = new HashSet<Long>();
-        sets.add(4L);
-        sets.add(3L);
-        this.ez.writeLogIds(sets);
+        sets = new HashSet<HandleState>();
+        HandleState state1 = new HandleState(4, 0);
+        HandleState state2 = new HandleState(3, 0);
+        sets.add(state1);
+        sets.add(state2);
+        this.ez.writeHandles(sets);
 
-        idsFromZk = this.ez.readLogIds();
+        idsFromZk = this.ez.readHandles();
         assertFalse(idsFromZk.isEmpty());
         assertEquals(2, idsFromZk.size());
-        assertTrue(idsFromZk.contains(3L));
-        assertTrue(idsFromZk.contains(4L));
-        assertFalse(idsFromZk.contains(1L));
+        assertTrue(idsFromZk.contains(state1));
+        assertTrue(idsFromZk.contains(state2));
+        assertFalse(idsFromZk.contains(state));
 
     }
 }
