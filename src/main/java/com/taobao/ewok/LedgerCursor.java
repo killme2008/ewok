@@ -21,17 +21,17 @@ import bitronix.tm.utils.Uid;
  * 
  */
 public class LedgerCursor {
-    private long lastEntry;
-    private LedgerHandle handle;
+    private final long lastEntry;
+    private final LedgerHandle handle;
     private long startEntry;
     private long endEntry;
     private int batchSize = 5;
     private Enumeration<LedgerEntry> iterator;
 
 
-    public LedgerCursor(long startEntry,long lastEntry, int batchSize, LedgerHandle handle) {
+    public LedgerCursor(final long startEntry, final long lastEntry, final int batchSize, final LedgerHandle handle) {
         super();
-        this.startEntry=startEntry;
+        this.startEntry = startEntry;
         this.lastEntry = lastEntry;
         this.batchSize = batchSize;
         this.handle = handle;
@@ -39,7 +39,7 @@ public class LedgerCursor {
 
 
     public LedgerHandle getHandle() {
-        return handle;
+        return this.handle;
     }
 
 
@@ -49,40 +49,45 @@ public class LedgerCursor {
 
 
     public TransactionLogRecord readLog() throws IOException, BKException, InterruptedException {
-        return readLog(false);
+        return this.readLog(false);
     }
 
 
-    public synchronized TransactionLogRecord readLog(boolean skipCrcCheck) throws IOException, BKException,
+    Enumeration<LedgerEntry> getIterator() {
+        return this.iterator;
+    }
+
+
+    public synchronized TransactionLogRecord readLog(final boolean skipCrcCheck) throws IOException, BKException,
             InterruptedException {
-        while (iterator != null && iterator.hasMoreElements()) {
-            LedgerEntry entry = iterator.nextElement();
+        while (this.iterator != null && this.iterator.hasMoreElements()) {
+            final LedgerEntry entry = this.iterator.nextElement();
             if (entry != null) {
-                DataInputStream in = new DataInputStream(entry.getEntryInputStream());
+                final DataInputStream in = new DataInputStream(entry.getEntryInputStream());
                 if (in.available() > 4) {
-                    int status = in.readInt();
-                    int recordLen = in.readInt();
-                    int headerLen = in.readInt();
-                    long time = in.readLong();
-                    int seqNo = in.readInt();
-                    int crc32 = in.readInt();
-                    byte gtridLen = in.readByte();
-                    byte[] gtridArray = new byte[gtridLen];
+                    final int status = in.readInt();
+                    final int recordLen = in.readInt();
+                    final int headerLen = in.readInt();
+                    final long time = in.readLong();
+                    final int seqNo = in.readInt();
+                    final int crc32 = in.readInt();
+                    final byte gtridLen = in.readByte();
+                    final byte[] gtridArray = new byte[gtridLen];
                     in.read(gtridArray);
-                    Uid gtrid = new Uid(gtridArray);
-                    int uniqueNamesCount = in.readInt();
-                    Set<String> uniqueNames = new HashSet<String>();
+                    final Uid gtrid = new Uid(gtridArray);
+                    final int uniqueNamesCount = in.readInt();
+                    final Set<String> uniqueNames = new HashSet<String>();
 
                     for (int i = 0; i < uniqueNamesCount; i++) {
-                        int length = in.readShort();
+                        final int length = in.readShort();
 
-                        byte[] nameBytes = new byte[length];
+                        final byte[] nameBytes = new byte[length];
                         in.read(nameBytes);
                         uniqueNames.add(new String(nameBytes, "US-ASCII"));
                     }
-                    int cEndRecord = in.readInt();
+                    final int cEndRecord = in.readInt();
 
-                    TransactionLogRecord tlog =
+                    final TransactionLogRecord tlog =
                             new TransactionLogRecord(status, recordLen, headerLen, time, seqNo, crc32, gtrid,
                                 uniqueNames, cEndRecord);
                     if (!skipCrcCheck && !tlog.isCrc32Correct()) {
@@ -94,20 +99,22 @@ public class LedgerCursor {
                     tlog.setEntryId(entry.getEntryId());
                     return tlog;
                 }
-                else
+                else {
                     return null;
+                }
 
             }
         }
         // quick path when move out of last entry
-        if (startEntry > lastEntry)
+        if (this.startEntry > this.lastEntry) {
             return null;
-        endEntry = startEntry + batchSize;
-        if (endEntry > lastEntry) {
-            endEntry = lastEntry;
         }
-        iterator = handle.readEntries(startEntry, endEntry);
-        startEntry = endEntry + 1;
-        return readLog(skipCrcCheck);
+        this.endEntry = this.startEntry + this.batchSize;
+        if (this.endEntry > this.lastEntry) {
+            this.endEntry = this.lastEntry;
+        }
+        this.iterator = this.handle.readEntries(this.startEntry, this.endEntry);
+        this.startEntry = this.endEntry + 1;
+        return this.readLog(skipCrcCheck);
     }
 }

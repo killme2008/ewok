@@ -522,7 +522,7 @@ public class BookkeeperJournal implements Journal {
 
 
     private static Map<Uid, TransactionLogRecord> collectDanglingRecords(final LedgerCursor tlc) throws IOException,
-            InterruptedException, CorruptedTransactionLogException {
+            BKException, InterruptedException, CorruptedTransactionLogException {
         final Map<Uid, TransactionLogRecord> danglingRecords = new HashMap<Uid, TransactionLogRecord>(64);
 
         int committing = 0;
@@ -533,11 +533,12 @@ public class BookkeeperJournal implements Journal {
             try {
                 tlog = tlc.readLog();
             }
-            catch (final BKException ex) {
+            catch (final IOException e) {
                 if (TransactionManagerServices.getConfiguration().isSkipCorruptedLogs()) {
-                    log.error("skipping corrupted log", ex);
+                    log.error("skipping corrupted log", e);
                     continue;
                 }
+                throw new CorruptedTransactionLogException("Corrupted transaction log entry");
             }
 
             if (tlog == null) {
