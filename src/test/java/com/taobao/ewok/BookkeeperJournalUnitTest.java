@@ -1,5 +1,10 @@
 package com.taobao.ewok;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Map;
@@ -13,7 +18,6 @@ import org.junit.Test;
 
 import bitronix.tm.utils.Uid;
 import bitronix.tm.utils.UidGenerator;
-import static org.junit.Assert.*;
 
 
 public class BookkeeperJournalUnitTest {
@@ -23,8 +27,8 @@ public class BookkeeperJournalUnitTest {
     @Before
     public void setUp() throws Exception {
         this.journal = new BookkeeperJournal();
-        Set<HandleState> states = this.journal.getEwokZookeeper().readHandles();
-        for (HandleState state : states) {
+        final Set<HandleState> states = this.journal.getEwokZookeeper().readHandles();
+        for (final HandleState state : states) {
             this.journal.deleteLedger(state.id);
         }
         this.journal.getEwokZookeeper().writeHandles(new HashSet<HandleState>());
@@ -35,7 +39,7 @@ public class BookkeeperJournalUnitTest {
     public void testOpen() throws Exception {
         this.journal.open();
         assertNotNull(this.journal.getCurrentAppender());
-        Set<HandleState> handles = this.journal.getHandles();
+        final Set<HandleState> handles = this.journal.getHandles();
         assertFalse(handles.isEmpty());
         System.out.println(handles);
 
@@ -43,10 +47,38 @@ public class BookkeeperJournalUnitTest {
 
 
     @Test
+    public void swapLogs() throws Exception {
+        this.journal.getConf().getBtmConf().setMaxLogSizeInMb(1);
+        this.journal.open();
+
+        final LedgerAppender currApd = this.journal.getCurrentAppender();
+        for (int i = 0; i < 10000; i++) {
+            final Uid commitedUid = UidGenerator.generateUid();
+            final Set<String> uniqueNames = new HashSet<String>();
+            uniqueNames.add("jdbc");
+            uniqueNames.add("jms");
+            this.journal.log(Status.STATUS_ACTIVE, commitedUid, uniqueNames);
+            this.journal.log(Status.STATUS_PREPARING, commitedUid, uniqueNames);
+            this.journal.log(Status.STATUS_PREPARED, commitedUid, uniqueNames);
+            this.journal.log(Status.STATUS_COMMITTING, commitedUid, uniqueNames);
+            this.journal.force();
+            if (i % 2 == 0) {
+                this.journal.log(Status.STATUS_COMMITTED, commitedUid, uniqueNames);
+            }
+        }
+        this.journal.force();
+        final Map<Uid, bitronix.tm.journal.TransactionLogRecord> map = this.journal.collectDanglingRecords();
+        assertNotNull(map);
+        assertEquals(5000, map.size());
+        assertFalse(currApd == this.journal.getCurrentAppender());
+    }
+
+
+    @Test
     public void logsCloseOpen() throws Exception {
         this.journal.open();
-        Uid commitedUid = UidGenerator.generateUid();
-        Set<String> uniqueNames = new HashSet<String>();
+        final Uid commitedUid = UidGenerator.generateUid();
+        final Set<String> uniqueNames = new HashSet<String>();
         uniqueNames.add("jdbc");
         uniqueNames.add("jms");
         this.journal.log(Status.STATUS_ACTIVE, commitedUid, uniqueNames);
@@ -55,29 +87,29 @@ public class BookkeeperJournalUnitTest {
         this.journal.log(Status.STATUS_COMMITTING, commitedUid, uniqueNames);
         this.journal.force();
         this.journal.log(Status.STATUS_COMMITTED, commitedUid, uniqueNames);
-        Uid committingUid = UidGenerator.generateUid();
+        final Uid committingUid = UidGenerator.generateUid();
         this.journal.log(Status.STATUS_ACTIVE, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_PREPARING, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_PREPARED, committingUid, uniqueNames);
         this.journal.log(Status.STATUS_COMMITTING, committingUid, uniqueNames);
         this.journal.force();
-        checkDanglingRecords(uniqueNames, committingUid);
+        this.checkDanglingRecords(uniqueNames, committingUid);
 
         this.journal.close();
         this.journal = new BookkeeperJournal();
         this.journal.open();
 
-        checkDanglingRecords(uniqueNames, committingUid);
+        this.checkDanglingRecords(uniqueNames, committingUid);
 
     }
 
 
-    private void checkDanglingRecords(Set<String> uniqueNames, Uid committingUid) throws IOException {
-        Map<Uid, bitronix.tm.journal.TransactionLogRecord> map = this.journal.collectDanglingRecords();
+    private void checkDanglingRecords(final Set<String> uniqueNames, final Uid committingUid) throws IOException {
+        final Map<Uid, bitronix.tm.journal.TransactionLogRecord> map = this.journal.collectDanglingRecords();
         assertNotNull(map);
         assertEquals(1, map.size());
         assertTrue(map.containsKey(committingUid));
-        bitronix.tm.journal.TransactionLogRecord rc = map.get(committingUid);
+        final bitronix.tm.journal.TransactionLogRecord rc = map.get(committingUid);
         assertEquals(committingUid, rc.getGtrid());
         assertEquals(Status.STATUS_COMMITTING, rc.getStatus());
         assertEquals(uniqueNames, rc.getUniqueNames());
