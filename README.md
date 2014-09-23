@@ -34,7 +34,7 @@ And ewok use bookkeeper to write transaction logs,it writes a TransactionLogReco
 Ewok use a config file named ewok-config.properties to configure it's properties:
 
 	 #zookeepere servers
-	 ewok.zkServers=10.232.102.191:2181
+	 ewok.zkServers=localhost:2181
 	 #special server id for this tm,default is local address
 	 ewok.serverId=test
 	 #zookeeper namespace
